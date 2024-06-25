@@ -45,8 +45,8 @@ class CppTemplateKernel(CppKernel):
         return PartialRender(
             template.render(kernel=self, **kwargs), self.render_hooks
         ).finalize_all()
-
-    def def_kernel(
+    
+    def set_args(
         self,
         inputs: Dict[str, ir.Buffer],
         outputs: Dict[str, ir.Buffer],
@@ -64,6 +64,13 @@ class CppTemplateKernel(CppKernel):
                 if orig in self.args.output_buffers:
                     self.args.output_buffers[alias] = self.args.output_buffers[orig]
 
+    def def_kernel(
+        self,
+        inputs: Dict[str, ir.Buffer],
+        outputs: Dict[str, ir.Buffer],
+        aliases: Optional[List[Tuple[ir.Buffer, ir.Buffer]]] = None,
+    ) -> str:
+        self.set_args(inputs, outputs, aliases)
         unique_sizevars = {
             s
             for input in inputs.values()
@@ -113,8 +120,14 @@ class CppTemplateKernel(CppKernel):
         else:
             raise NotImplementedError(f"Unsupported dtype: {node.get_dtype()}")
 
-    def size(self, node: ir.Buffer, dim: int) -> str:
-        return cexpr_index(self.rename_indexing(node.get_size()[dim]))
+    def size(self, node: ir.Buffer, dim: int, default_value=-1, as_int=False) -> str:
+        sizes = node.get_size()
+        dim = dim if dim >= 0 else dim + len(sizes)
+        if dim < 0 or dim >= len(sizes):
+            return default_value
+        if as_int:
+            return self.rename_indexing(sizes[dim])
+        return cexpr_index(self.rename_indexing(sizes[dim]))
 
     def stride(self, node: ir.Buffer, dim: int) -> str:
         return cexpr_index(self.rename_indexing(node.get_stride()[dim]))
@@ -131,12 +144,15 @@ class CppTemplateKernel(CppKernel):
         )
         return f"{inner_name}[{cexpr_index(index)}]"
 
-    def slice_nd(self, node, ranges: List[Tuple[Any, Any]]) -> ir.ReinterpretView:
+    def slice_nd(self, node, ranges: List[Tuple[Any, Any]], slice_from_back=False) -> ir.ReinterpretView:
         """
         Slice the given node with a list of ranges (start and end) corresponding to its dims.
         The dim is not sliced if the corresponding range is empty.
         """
-        assert len(ranges) == len(node.get_size())
+        if slice_from_back:
+            ranges = [()] * (len(node.get_size()) - len(ranges)) + ranges
+        else:
+            assert len(ranges) == len(node.get_size())
         sliced = wrap_with_tensorbox(node)
         for dim, _range in enumerate(ranges):
             if len(_range) == 0:
