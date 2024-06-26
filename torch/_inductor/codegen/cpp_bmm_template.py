@@ -20,8 +20,10 @@ MM_TEMPLATES = r"""
 void one_thread_mm(
     const {{micro_gemm.get_common_options()['input_t']}}* X,
     const {{micro_gemm.get_common_options()['input_t']}}* W,
-    {{micro_gemm.get_common_options()['output_t']}}* Y,
-    const long ks0 = 0
+    {{micro_gemm.get_common_options()['input_t']}}* Y
+    {%- if is_dynamic_M %},
+    const int64_t {{kernel.size(GemmOut, -2, unwrapped=True)}}
+    {% endif %}
 )
 {
     {{kernel.maybe_codegen_profile()}}
@@ -64,10 +66,17 @@ void one_thread_mm(
         const int64_t m_start = mc * M0;
         const int64_t m_end = std::min((mc + Mc_blocks) * M0, M);
         const int64_t m_size = m_end - m_start;
+        {%- if use_local_acc %}
+        {{ kernel.define_buffer(acc_buf_name, [1, "m_end - m_start", "N0"]) }}
+        {%- endif %}
         for (int64_t nc = n_block_start; nc < n_block_end; ++nc) {
             const int64_t n_start = nc * N0;
             const int64_t n_size = N0;
+            {%- if use_local_acc %}
+            {%- set acc = kernel.local_buffers[acc_buf_name] %}
+            {%- else %}
             {%- set acc = kernel.slice_nd(GemmOut, [(0, 1), ("m_start", "m_end"), ("n_start", "n_start + N0")]) %}
+            {%- endif %}
             for (int64_t kc = k_block_start; kc < k_block_end; kc += Kc_blocks) {
                 int64_t k_start = kc * K0;
                 int64_t k_end = std::min((kc + Kc_blocks) * K0, K);
@@ -91,8 +100,10 @@ void one_thread_mm(
 void many_thread_mm(
     const {{micro_gemm.get_common_options()['input_t']}}* X,
     const {{micro_gemm.get_common_options()['input_t']}}* W,
-    {{micro_gemm.get_common_options()['output_t']}}* Y,
-    const long ks0 = 0
+    {{micro_gemm.get_common_options()['input_t']}}* Y
+    {%- if is_dynamic_M %},
+    const int64_t {{kernel.size(GemmOut, -2, unwrapped=True)}}
+    {% endif %}
 )
 {
     {{kernel.maybe_codegen_profile()}}
@@ -144,10 +155,17 @@ void many_thread_mm(
             const int64_t m_start = mc * M0;
             const int64_t m_end = std::min((mc + Mc_blocks) * M0, M);
             const int64_t m_size = m_end - m_start;
+            {%- if use_local_acc %}
+            {{ kernel.define_buffer(acc_buf_name, [1, "m_end - m_start", "N0"]) }}
+            {%- endif %}
             for (int64_t nc = n_block_start; nc < n_block_end; ++nc) {
                 const int64_t n_start = nc * N0;
                 const int64_t n_size = N0;
+                {%- if use_local_acc %}
+                {%- set acc = kernel.local_buffers[acc_buf_name] %}
+                {%- else %}
                 {%- set acc = kernel.slice_nd(GemmOut, [(0, 1), ("m_start", "m_end"), ("n_start", "n_start + N0")]) %}
+                {%- endif %}
                 for (int64_t kc = k_block_start; kc < k_block_end; kc += Kc_blocks) {
                     int64_t k_start = kc * K0;
                     int64_t k_end = std::min((kc + Kc_blocks) * K0, K);
@@ -198,7 +216,7 @@ BMM_WRAPPER = r"""
 extern "C"
 {{kernel.def_kernel(inputs={"X": X, "W": W}, outputs={"Y": Y}, aliases=buffer_aliases)}}
 {
-    constexpr int64_t B = {{kernel.size(GemmOut, -3, default_value=1, as_int=True)}};
+    const int64_t B = {{kernel.size(GemmOut, -3, default_value=1, unwrapped=True)}};
     constexpr int64_t num_threads = {{num_threads}};
     int64_t B_single_thread_block = (B / num_threads) * num_threads;
     
@@ -241,7 +259,7 @@ class CppBmmTemplate(CppTemplate):
     ):
         assert layout.dtype in [torch.float, torch.bfloat16, torch.half]
         super().__init__(
-            "unpacked_bmm", input_nodes, layout, epilogue_creator=epilogue_creator
+            "unpacked_bmm", input_nodes, layout, num_threads, epilogue_creator=epilogue_creator
             )
         self.beta = beta
         self.alpha = alpha
@@ -478,6 +496,7 @@ class CppBmmTemplate(CppTemplate):
 
         Y_2d: Union[ir.Buffer, ir.ReinterpretView] = Y
         use_local_acc = self.layout.dtype != torch.float
+        acc_buf_name = "local_acc_buf"
         if epilogue_nodes:
             epilogues.extend(epilogue_nodes)
             assert Y.get_numel() == epilogues[-1].get_numel()
@@ -540,6 +559,7 @@ class CppBmmTemplate(CppTemplate):
             reindexers=reindexers,
             Y_2d=Y_2d,
             use_local_acc=use_local_acc,
+            acc_buf_name=acc_buf_name,
             is_bmm=True,
         )
         result = self._template_from_string(MICROKERNEL_DEF).render(**options)

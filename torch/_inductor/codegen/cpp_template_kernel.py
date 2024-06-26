@@ -120,12 +120,12 @@ class CppTemplateKernel(CppKernel):
         else:
             raise NotImplementedError(f"Unsupported dtype: {node.get_dtype()}")
 
-    def size(self, node: ir.Buffer, dim: int, default_value=-1, as_int=False) -> str:
+    def size(self, node: ir.Buffer, dim: int, default_value=-1, unwrapped=False) -> str:
         sizes = node.get_size()
         dim = dim if dim >= 0 else dim + len(sizes)
         if dim < 0 or dim >= len(sizes):
             return default_value
-        if as_int:
+        if unwrapped:
             return self.rename_indexing(sizes[dim])
         return cexpr_index(self.rename_indexing(sizes[dim]))
 

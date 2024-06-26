@@ -261,26 +261,25 @@ class TestSelectAlgorithm(BaseTestSelectAlgorithm):
     @patches
     @torch.no_grad
     @unittest.skipIf(not TEST_MKL, "Test requires MKL")
-    @dtypes(torch.float)
+    @dtypes(torch.float, torch.bfloat16, torch.half)
     def test_bmm_with_pointwise(self, dtype):
-        bs = 60
+        bs = 30
         Md = 384
-        Kd = 196
-        Nd = 384
+        Kd = 10
+        Nd = 96
         class M(torch.nn.Module):
-            def __init__(self, other):
+            def __init__(self):
                 super().__init__()
-                self.bmm = lambda x: x @ other
                 self.epilogue = torch.nn.ReLU()
 
-            def forward(self, x):
-                return self.epilogue(self.bmm(x))
+            def forward(self, x, other):
+                return self.epilogue((x @ other))
 
         counters.clear()
-        v = torch.randn(bs, Md, Kd).to(dtype=dtype)
-        u = torch.randn(bs, Kd, Nd).to(dtype=dtype)
-        mod = M(other=u).to(dtype=dtype).eval()
-        self.common(mod, (v,))
+        u = torch.randn(bs, Md, Kd).to(dtype=dtype)
+        v = torch.randn(bs, Kd, Nd).to(dtype=dtype)
+        mod = M().to(dtype=dtype).eval()
+        self.common(mod, (u,v))
         self.assertEqual(counters["inductor"]["select_algorithm_autotune"], 1)
         self.assertEqual(counters["inductor"]["cpp_epilogue_fusion_counter"], 1)
 
@@ -621,9 +620,6 @@ class TestSelectAlgorithmDynamicShapes(_DynamicShapesTestBase):
     test_linear_with_pointwise_dynamic_shapes = (
         TestSelectAlgorithm.test_linear_with_pointwise
     )
-    test_bmm_with_pointwise_dynamic_shapes = (
-        TestSelectAlgorithm.test_bmm_with_pointwise
-    )
     test_linear_with_transpose_dynamic_shapes = (
         TestSelectAlgorithm.test_linear_with_transpose
     )
@@ -643,6 +639,35 @@ class TestSelectAlgorithmDynamicShapes(_DynamicShapesTestBase):
     test_quantized_linear_amx_dynamic_shapes = (
         TestSelectAlgorithm.test_quantized_linear_amx
     )
+
+    @patches
+    @torch.no_grad
+    @unittest.skipIf(not TEST_MKL, "Test requires MKL")
+    @dtypes(torch.float, torch.bfloat16, torch.half)
+    def test_bmm_with_pointwise_dynamic_shapes(self, dtype):
+        bs = 30
+        Md = 384
+        Kd = 196
+        Nd = 96
+        class M(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.epilogue = torch.nn.ReLU()
+
+            def forward(self, x, other):
+                return self.epilogue((x @ other))
+
+        counters.clear()
+        u = torch.randn(bs, Md, Kd).to(dtype=dtype)
+        v = torch.randn(bs, Kd, Nd).to(dtype=dtype)
+        torch._dynamo.mark_dynamic(u, 0)
+        torch._dynamo.mark_dynamic(u, 1)
+        torch._dynamo.mark_static(u, 2)
+        torch._dynamo.mark_static(v, 2)
+        mod = M().to(dtype=dtype).eval()
+        self.common(mod, (u,v))
+        self.assertEqual(counters["inductor"]["select_algorithm_autotune"], 1)
+        self.assertEqual(counters["inductor"]["cpp_epilogue_fusion_counter"], 1)
 
 
 instantiate_device_type_tests(TestSelectAlgorithm, globals(), only_for="cpu")
