@@ -144,15 +144,12 @@ class CppTemplateKernel(CppKernel):
         )
         return f"{inner_name}[{cexpr_index(index)}]"
 
-    def slice_nd(self, node, ranges: List[Tuple[Any, Any]], slice_from_back=False) -> ir.ReinterpretView:
+    def slice_nd(self, node, ranges: List[Tuple[Any, Any]]) -> ir.ReinterpretView:
         """
         Slice the given node with a list of ranges (start and end) corresponding to its dims.
         The dim is not sliced if the corresponding range is empty.
         """
-        if slice_from_back:
-            ranges = [()] * (len(node.get_size()) - len(ranges)) + ranges
-        else:
-            assert len(ranges) == len(node.get_size())
+        assert len(ranges) == len(node.get_size())
         sliced = wrap_with_tensorbox(node)
         for dim, _range in enumerate(ranges):
             if len(_range) == 0:
