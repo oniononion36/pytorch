@@ -7,21 +7,21 @@ from .. import ir, lowering as L
 
 from ..kernel.mm_common import mm_args
 from ..select_algorithm import DataProcessorTemplateWrapper
+from ..mkldnn_lowerings import create_epilogue_with_attr
 from ..utils import parallel_num_threads
 from ..virtualized import V
 from .cpp_micro_gemm import create_micro_gemm
 from .cpp_template import CppTemplate
+from .cpp_template_kernel import parse_expr_with_index_symbols
 
 from .cpp_template_kernel import CppTemplateKernel
 from .cpp_gemm_template import GEMM_TEMPLATE, CppPackedGemmTemplate
-from .cpp_utils import DTYPE_TO_CPP, GemmBlocking
+from .cpp_utils import DTYPE_TO_CPP, GemmBlocking, LocalBufferScope
 
 MICROKERNEL_DEF = r"""
 {{template.header().getvalue()}}
 
 {{micro_gemm.codegen_define(kernel)}}
-
-{{kernel.set_args(inputs={"X": X, "W": W}, outputs={"Y": Y}, aliases=buffer_aliases) }}
 """
 
 SINGLE_THREAD_STUB = r"""
@@ -48,29 +48,32 @@ void blocked_mm(
 
 BMM_WRAPPER = r"""
 extern "C"
-{{kernel.def_kernel(inputs={"X": X, "W": W}, outputs={"Y": Y}, aliases=buffer_aliases)}}
+{{kernel.def_kernel(inputs={"BX": BX, "BW": BW}, outputs={"BY": BY}, aliases=buffer_aliases)}}
 {
-    const int64_t B = {{kernel.size(GemmOut, -3, default_value=1, unwrapped=True)}};
+    const int64_t B = {{kernel.size(BY, -3, unwrapped=True)}};
+    {%- if num_threads > 1 %}
     constexpr int64_t num_threads = {{num_threads}};
     int64_t B_single_thread_block = (B / num_threads) * num_threads;
     
     #pragma omp parallel for num_threads({{num_threads}})
+    {%- else %}
+    int64_t B_single_thread_block = B;
+    {%- endif %}
     for (int64_t b_start = 0; b_start < B_single_thread_block; ++b_start) {
         single_thread_mm(
-            &{{kernel.index(X, ["b_start", 0, 0])}},
-            &{{kernel.index(W, ["b_start", 0, 0])}},
-            &{{kernel.index(Y, ["b_start", 0, 0])}}
+            &{{kernel.index(BX, ["b_start", 0, 0])}},
+            &{{kernel.index(BW, ["b_start", 0, 0])}},
+            &{{kernel.index(BY, ["b_start", 0, 0])}}
             {%- if is_dynamic_M %},
             {{kernel.size(GemmOut, -2)}}
             {% endif %}
-            
         );
     }
     for (int64_t b_start = B_single_thread_block; b_start < B; ++b_start) {
         blocked_mm(
-            &{{kernel.index(X, ["b_start", 0, 0])}},
-            &{{kernel.index(W, ["b_start", 0, 0])}},
-            &{{kernel.index(Y, ["b_start", 0, 0])}}
+            &{{kernel.index(BX, ["b_start", 0, 0])}},
+            &{{kernel.index(BW, ["b_start", 0, 0])}},
+            &{{kernel.index(BY, ["b_start", 0, 0])}}
             {%- if is_dynamic_M %},
             {{kernel.size(GemmOut, -2)}}
             {% endif %}
@@ -137,6 +140,87 @@ class CppBmmTemplate(CppPackedGemmTemplate):
         template.maybe_append_choice(choices)
         return template
 
+    def get_options(self, kernel, template_buffer_node, epilogue_nodes, **kwargs):
+        options = super().get_options(kernel, template_buffer_node, epilogue_nodes, **kwargs)
+        options['should_pack_weights'] = self.should_pack_weights
+        BX, BW, BY = options['X'], options['W'], options['Y']
+        options['BX'], options['BW'], options['BY'] = BX, BW, BY
+        for kword in ['X', 'W', 'Y', 'GemmOut', 'Y_2d']:
+            if isinstance(options[kword], list):
+                for i in range(len(options[kword])):
+                    node = options['Y']
+                    #pointwise = create_epilogue_with_attr(node, 'relu')
+                    #pointwise.origin_node = options[kword][i].origin_node
+                    #pointwise.origins = options[kword][i].origins
+                    #new_node = ir.ComputedBuffer(
+                    #    name=options[kword][i].name,
+                    #    layout=node.layout,
+                    #    data=pointwise
+                    #)
+                    #options[kword][i] = new_node
+
+                    #kernel.select(options[kword][i], 0, 0)
+                #options[kword] = [
+                #    cast(ir.ComputedBuffer, kernel.select(options[kword][i], 0, 0)) for i in range(len(options[kword]))
+                #]
+            else:
+                options[kword] = kernel.select(options[kword], 0, 0)
+        return options
+
+    def store_output(
+        self,
+        dst: ir.Buffer,
+        src: ir.Buffer,
+        orig_src: Optional[ir.Buffer] = None,
+        epilogue_nodes: Optional[List[ir.IRNode]] = None,
+        offsets: Optional[List[Any]] = None,
+        reindexers: Optional[List[Optional[Callable[[List[Any]], List[Any]]]]] = None,
+    ):
+        """
+        Store the `src` buffer to the `dst` buffer. The size of `src` and `dst` should match.
+        If `epilogue_nodes` is provided, the `src` buffer is firstly computed with the epilogues
+        before stored to `dst`. The `epilogues_nodes` are all pointwise.
+
+        Notes:
+        1. `src` and `dst` buffer could be the same buffer in which case we are doing in-place compute
+           and stores. In case `epilogue_nodes` are not provided, we do nothing.
+        2. The `epilogue_nodes`, if exist, have computations on `src` before storing to `dst` but since
+           they come form the original Inductor IR, they might need to be adjusted before working with
+           `src` and `dst` as outlined below:
+           a) `src` or `dst` buffer could be a sub-slice of the ranges the `epilogue_nodes`work on.
+              In this case, the `offsets` could be provided to adjust the indices passed to
+              `epilogue_nodes` during codegen and the data ranges are also configured according to
+              the sizes of `src` and `dst`.
+           b) `dst` might be indexed in a different way as the `epilogue_nodes`, hence a `reindexer` is
+              needed on the indices to `epilogue_nodes` to match the indexing of `dst`.
+           c) If `src` is local, we need to add a local buffer for it and localize the `orig_src` buffer
+              in `epilogue_nodes` with `src`.
+        """
+        assert dst.get_size() == src.get_size()
+        if offsets:
+            offsets = parse_expr_with_index_symbols(offsets)
+        if epilogue_nodes:
+            with LocalBufferScope(self) as scope:
+                assert orig_src is not None
+                if orig_src.get_name() != src.get_name():
+                    scope.add_local_buffer(src)
+                    epilogue_nodes = scope.localize_buffer(
+                        orig_src, src, epilogue_nodes
+                    )
+                return self.store_pointwise_nodes(
+                    dst, epilogue_nodes, offsets, reindexers  # type: ignore[arg-type]
+                )
+        else:
+            if dst.get_name() != src.get_name():
+                # src is local
+                copy = L.copy(dst, src).data.data
+                with LocalBufferScope(self) as scope:
+                    scope.add_local_buffer(src)
+                    return self.store_pointwise_nodes(dst, [copy])
+            else:
+                assert dst.layout == src.layout
+                return ""
+
     def render(  # type: ignore[override]
         self,
         kernel: CppTemplateKernel,
@@ -145,9 +229,11 @@ class CppBmmTemplate(CppPackedGemmTemplate):
         **kwargs,
     ) -> str:
         options = self.get_options(kernel, template_buffer_node, epilogue_nodes, **kwargs)
-        options['should_pack_weights'] = self.should_pack_weights
-        options['is_bmm'] = True
+        BX, BW, BY = options['BX'], options['BW'], options['BY']
+        X, W, Y = options['X'], options['W'], options['Y']
+        buffer_aliases = options['buffer_aliases']
 
+        kernel.set_args(inputs={"X": X, "W": W}, outputs={"Y": Y}, aliases=buffer_aliases)
         result = self._template_from_string(MICROKERNEL_DEF).render(**options)
         result += self._template_from_string(BLOCKED_STUB+GEMM_TEMPLATE).render(**options)
         self.thread_blocking.clear_cache(self)
@@ -158,5 +244,6 @@ class CppBmmTemplate(CppPackedGemmTemplate):
         self.thread_blocking.clear_cache(self)
         self.cache_blocking.clear_cache(self)
         self.num_threads = tmp_num_threads
+        kernel.set_args(inputs={"BX": BX, "BW": BW}, outputs={"BY": BY}, aliases=buffer_aliases)
         result += self._template_from_string(BMM_WRAPPER).render(**options)
         return result

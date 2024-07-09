@@ -120,11 +120,9 @@ class CppTemplateKernel(CppKernel):
         else:
             raise NotImplementedError(f"Unsupported dtype: {node.get_dtype()}")
 
-    def size(self, node: ir.Buffer, dim: int, default_value=-1, unwrapped=False) -> str:
+    def size(self, node: ir.Buffer, dim: int, unwrapped=False) -> str:
         sizes = node.get_size()
         dim = dim if dim >= 0 else dim + len(sizes)
-        if dim < 0 or dim >= len(sizes):
-            return default_value
         if unwrapped:
             return str(self.rename_indexing(sizes[dim]))
         return cexpr_index(self.rename_indexing(sizes[dim]))
@@ -157,6 +155,12 @@ class CppTemplateKernel(CppKernel):
             assert len(_range) == 2
             start, end = parse_expr_with_index_symbols(_range)
             sliced = L.slice_(sliced, dim, start, end, clamp=False)
+        assert isinstance(sliced.data, ir.ReinterpretView), sliced.data
+        return sliced.data
+
+    def select(self, node, dim: int, idx: int) -> ir.ReinterpretView:
+        wrapped_node = wrap_with_tensorbox(node)
+        sliced = L.select(wrapped_node, dim, idx)
         assert isinstance(sliced.data, ir.ReinterpretView), sliced.data
         return sliced.data
 

@@ -162,7 +162,7 @@ def tuned_bmm(mat1, mat2, *, layout=None):
 
         CUTLASSGemmTemplate.add_cutlass_gemm_choices(choices, layout, [mat1, mat2])
 
-    if use_cpp_gemm_template(layout, mat1, mat2, require_constant=False):
+    if use_cpp_gemm_template(layout, mat1, mat2, require_constant_mat2=False):
         from ..codegen.cpp_bmm_template import CppBmmTemplate
 
         CppBmmTemplate.add_choices(
