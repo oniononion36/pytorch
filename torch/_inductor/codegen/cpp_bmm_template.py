@@ -168,16 +168,9 @@ class CppBmmTemplate(CppPackedGemmTemplate):
         result += self._template_from_string(BLOCKED_STUB + GEMM_TEMPLATE).render(
             **options
         )
-        self.thread_blocking.clear_cache(self)
-        self.cache_blocking.clear_cache(self)
-        tmp_num_threads = self.num_threads
-        self.num_threads = 1
         result += self._template_from_string(SINGLE_THREAD_STUB + GEMM_TEMPLATE).render(
             **{**options, "num_threads": 1}
         )
-        self.thread_blocking.clear_cache(self)
-        self.cache_blocking.clear_cache(self)
-        self.num_threads = tmp_num_threads
         kernel.set_args(
             inputs={"BX": BX, "BW": BW}, outputs={"BY": BY}, aliases=buffer_aliases
         )

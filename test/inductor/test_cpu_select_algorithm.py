@@ -233,18 +233,17 @@ class TestSelectAlgorithm(BaseTestSelectAlgorithm):
             "hardsigmoid",
             "leaky_relu",
             "hardtanh",
-            # TODO(frost-intel): Support binary epilogue fusion.
-            # "add",
-            # "sub",
-            # "mul",
-            # "div",
+            "add",
+            "sub",
+            "mul",
+            "div",
         ),
     )
     @dtypes(torch.float, torch.bfloat16, torch.half)
     def test_linear_with_pointwise(self, bias, epilogue, dtype):
-        batch_size = 2
-        in_features = 2
-        out_features = 2
+        batch_size = 384
+        in_features = 196
+        out_features = 384
 
         class M(torch.nn.Module):
             def __init__(self, bias, epilogue, other):
@@ -300,10 +299,11 @@ class TestSelectAlgorithm(BaseTestSelectAlgorithm):
             "hardsigmoid",
             "leaky_relu",
             "hardtanh",
-            "add",
-            "sub",
-            "mul",
-            "div",
+            # TODO(frost-intel): Support binary epilogue fusion.
+            # "add",
+            # "sub",
+            # "mul",
+            # "div",
         ),
     )
     @dtypes(torch.float32, torch.bfloat16, torch.half)

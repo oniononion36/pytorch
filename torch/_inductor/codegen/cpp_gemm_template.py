@@ -66,11 +66,11 @@ GEMM_TEMPLATE = r"""
     {%- else %}
     constexpr int64_t M = {{kernel.size(GemmOut, 0)}};
     constexpr int64_t M0_blocks = (M + M0 - 1) / M0;
-    constexpr int64_t Mt_blocks = {{template.thread_blocking().block_m}};
-    constexpr int64_t Nt_blocks = {{template.thread_blocking().block_n}};
-    constexpr int64_t Kt_blocks = {{template.thread_blocking().block_k}};
-    constexpr int64_t Mc_blocks = {{template.cache_blocking().block_m}};
-    constexpr int64_t Kc_blocks = {{template.cache_blocking().block_k}};
+    constexpr int64_t Mt_blocks = {{template.thread_blocking(num_threads).block_m}};
+    constexpr int64_t Nt_blocks = {{template.thread_blocking(num_threads).block_n}};
+    constexpr int64_t Kt_blocks = {{template.thread_blocking(num_threads).block_k}};
+    constexpr int64_t Mc_blocks = {{template.cache_blocking(num_threads).block_m}};
+    constexpr int64_t Kc_blocks = {{template.cache_blocking(num_threads).block_k}};
     {%- endif %}
 
     // TODO(jgong5): support k-slicing
@@ -180,8 +180,13 @@ class CppPackedGemmTemplate(CppTemplate):
         self.is_dynamic_M = has_free_symbols((m,))
         self.should_pack_weights = True
 
-    @cache_on_self
-    def thread_blocking(self) -> GemmBlocking:
+    def thread_blocking(self, num_threads=None, reset_cache=False) -> GemmBlocking:
+        if hasattr(self, "_thread_blocking_cache") and not reset_cache:
+            thread_count, cache = self._thread_blocking_cache
+            if thread_count == num_threads:
+                return cache
+        if num_threads is None:
+            num_threads = self.num_threads
         # TODO(jgong5): allow tuning various blocking options
         def get_factors(number):
             factors = []
@@ -205,32 +210,34 @@ class CppPackedGemmTemplate(CppTemplate):
         m_blocks = (self.m + register_blocking.block_m - 1) // register_blocking.block_m
         n_blocks = (self.n + register_blocking.block_n - 1) // register_blocking.block_n
         k_blocks = (self.k + register_blocking.block_k - 1) // register_blocking.block_k
-        factors = get_factors(self.num_threads)
+        factors = get_factors(num_threads)
         assert len(factors) > 0
+        blocking = None
         for factor in factors:
-            if n_blocks % factor == 0 and m_blocks % (self.num_threads // factor) == 0:
-                return get_blocking(
-                    self.num_threads, factor, m_blocks, n_blocks, k_blocks
+            if n_blocks % factor == 0 and m_blocks % (num_threads // factor) == 0:
+                blocking = get_blocking(
+                    num_threads, factor, m_blocks, n_blocks, k_blocks
                 )
         for factor in factors:
             if n_blocks % factor == 0:
-                return get_blocking(
-                    self.num_threads, factor, m_blocks, n_blocks, k_blocks
+                blocking = get_blocking(
+                    num_threads, factor, m_blocks, n_blocks, k_blocks
                 )
-            cofactor = self.num_threads // factor
+            cofactor = num_threads // factor
             if m_blocks % cofactor == 0:
-                return get_blocking(
-                    self.num_threads, factor, m_blocks, n_blocks, k_blocks
+                blocking = get_blocking(
+                    num_threads, factor, m_blocks, n_blocks, k_blocks
                 )
-        raise AssertionError("Should not reach here.")
+        self._thread_blocking_cache = (num_threads, blocking)
+        assert blocking is not None
+        return blocking
 
-    @cache_on_self
-    def cache_blocking(self) -> GemmBlocking:
+    def cache_blocking(self, num_threads=None) -> GemmBlocking:
         # TODO(jgong5): improve cache blocking with CPU info
         assert (
             not self.is_dynamic_M
         ), "Unable to determine cache blocking for dynamic M."
-        thread_blocking = self.thread_blocking()
+        thread_blocking = self.thread_blocking(num_threads=num_threads)
         return GemmBlocking(thread_blocking.block_m, 1, thread_blocking.block_k)
 
     @staticmethod
