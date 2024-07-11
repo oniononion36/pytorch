@@ -117,9 +117,9 @@ inline void {{kernel_name}}(
         Generate the code for calling the templated kernel that computes
         `C += alpha * A @ B` if `accum` is True, or `C = alpha * A @ B` otherwise.
         """
-        A_ptr = f"&({kernel.index(A, [0] * len(A.get_size()))})"
-        B_ptr = f"&({kernel.index(B, [0] * len(B.get_size()))})"
-        C_ptr = f"&({kernel.index(C, [0] * len(C.get_size()))})"
+        A_ptr = f"&({kernel.index(A, [0, 0])})"
+        B_ptr = f"&({kernel.index(B, [0, 0])})"
+        C_ptr = f"&({kernel.index(C, [0, 0])})"
         M = kernel.size(C, 0)
         N = kernel.size(C, 1)
         K = kernel.size(A, 1)

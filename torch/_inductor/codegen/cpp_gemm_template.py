@@ -132,6 +132,9 @@ GEMM_TEMPLATE = r"""
                     } else {
                         {{ micro_gemm.codegen_call(kernel, tile_X, tile_W, acc, accum=True)|indent(24, false) }}
                     }
+                    {%- endif %}
+                    {%- if use_local_acc %}
+                    {%- endif %}
                 }
                 {%- set tile_Y = kernel.slice_nd(Y_2d, [("m_start", "m_end"), ("n_start", "n_start + N0")]) %}
                 {{ kernel.store_output(
@@ -477,7 +480,14 @@ class CppPackedGemmTemplate(CppTemplate):
         template.maybe_append_choice(choices)
         return template
 
+<<<<<<< HEAD
     def get_options(
+=======
+    def _get_default_reindexers(self, epilogue_nodes):
+        return [None] * len(epilogue_nodes)
+
+    def get_options(  # type: ignore[override]
+>>>>>>> Fix epilogue nodes
         self,
         kernel: CppTemplateKernel,
         template_buffer_node: Optional[ir.CppTemplateBuffer] = None,
@@ -591,7 +601,7 @@ class CppPackedGemmTemplate(CppTemplate):
                 Y.get_size() == template_buffer.get_size()
                 and Y.get_stride() == template_buffer.get_stride()
             ):
-                reindexers.extend([None] * len(epilogue_nodes))
+                reindexers.extend(self._get_default_reindexers(epilogue_nodes))
                 Y_2d = Y
             else:
                 stride_reversed_order = list(
@@ -656,7 +666,6 @@ class CppPackedGemmTemplate(CppTemplate):
             w_scale=w_scale,
             w_zp=w_zp,
             acc_buf_dtype=torch.int32 if int8_gemm else torch.float,
-            is_bmm=False
         )
         return options
 

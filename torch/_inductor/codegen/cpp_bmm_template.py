@@ -1,22 +1,13 @@
 # mypy: allow-untyped-defs
-from typing import Any, Callable, cast, List, Optional, Union
+from typing import Callable, List, Optional
 
-import torch
-import torch.utils
-from .. import ir, lowering as L
+from .. import ir
 
-from ..kernel.mm_common import mm_args
 from ..select_algorithm import DataProcessorTemplateWrapper
-from ..mkldnn_lowerings import create_epilogue_with_attr
-from ..utils import parallel_num_threads
-from ..virtualized import V
-from .cpp_micro_gemm import create_micro_gemm
-from .cpp_template import CppTemplate
-from .cpp_template_kernel import parse_expr_with_index_symbols
+from .cpp_gemm_template import CppPackedGemmTemplate, GEMM_TEMPLATE
 
 from .cpp_template_kernel import CppTemplateKernel
-from .cpp_gemm_template import GEMM_TEMPLATE, CppPackedGemmTemplate
-from .cpp_utils import DTYPE_TO_CPP, GemmBlocking, LocalBufferScope
+from .cpp_utils import GemmBlocking
 
 MICROKERNEL_DEF = r"""
 {{template.header().getvalue()}}
@@ -54,7 +45,7 @@ extern "C"
     {%- if num_threads > 1 %}
     constexpr int64_t num_threads = {{num_threads}};
     int64_t B_single_thread_block = (B / num_threads) * num_threads;
-    
+
     #pragma omp parallel for num_threads({{num_threads}})
     {%- else %}
     int64_t B_single_thread_block = B;
@@ -94,7 +85,7 @@ class CppBmmTemplate(CppPackedGemmTemplate):
         alpha=1,
         has_bias=False,
         epilogue_creator: Optional[Callable[[ir.Buffer], ir.Pointwise]] = None,
-        name="bmm"
+        name="bmm",
     ):
         super().__init__(
             input_nodes,
@@ -105,7 +96,7 @@ class CppBmmTemplate(CppPackedGemmTemplate):
             alpha=alpha,
             has_bias=has_bias,
             epilogue_creator=epilogue_creator,
-            name=name
+            name=name,
         )
         self.should_pack_weights = False
 
@@ -131,40 +122,29 @@ class CppBmmTemplate(CppPackedGemmTemplate):
             trans_w=trans_w,
             input_indices=input_indices,
             should_pack_weights=should_pack_weights,
-            epilogue_creator=epilogue_creator
+            epilogue_creator=epilogue_creator,
         )
-        template = DataProcessorTemplateWrapper(
-            CppBmmTemplate,
-            **options
-        )
+        template = DataProcessorTemplateWrapper(CppBmmTemplate, **options)
         template.maybe_append_choice(choices)
         return template
 
-    def get_options(self, kernel, template_buffer_node, epilogue_nodes, **kwargs):
-        options = super().get_options(kernel, template_buffer_node, epilogue_nodes, **kwargs)
-        options['should_pack_weights'] = self.should_pack_weights
-        BX, BW, BY = options['X'], options['W'], options['Y']
-        options['BX'], options['BW'], options['BY'] = BX, BW, BY
-        for kword in ['X', 'W', 'Y', 'GemmOut', 'Y_2d']:
-            if isinstance(options[kword], list):
-                for i in range(len(options[kword])):
-                    node = options['Y']
-                    #pointwise = create_epilogue_with_attr(node, 'relu')
-                    #pointwise.origin_node = options[kword][i].origin_node
-                    #pointwise.origins = options[kword][i].origins
-                    #new_node = ir.ComputedBuffer(
-                    #    name=options[kword][i].name,
-                    #    layout=node.layout,
-                    #    data=pointwise
-                    #)
-                    #options[kword][i] = new_node
+    def _get_default_reindexers(self, epilogue_nodes):
+        def reindexer(args):
+            if len(epilogue_nodes) == 0:
+                return args
+            return [0] + args
 
-                    #kernel.select(options[kword][i], 0, 0)
-                #options[kword] = [
-                #    cast(ir.ComputedBuffer, kernel.select(options[kword][i], 0, 0)) for i in range(len(options[kword]))
-                #]
-            else:
-                options[kword] = kernel.select(options[kword], 0, 0)
+        return [reindexer]
+
+    def get_options(self, kernel, template_buffer_node, epilogue_nodes, **kwargs):
+        options = super().get_options(
+            kernel, template_buffer_node, epilogue_nodes, **kwargs
+        )
+        options["should_pack_weights"] = self.should_pack_weights
+        BX, BW, BY = options["X"], options["W"], options["Y"]
+        options["BX"], options["BW"], options["BY"] = BX, BW, BY
+        for kword in ["X", "W", "Y", "GemmOut", "Y_2d"]:
+            options[kword] = kernel.select(options[kword], 0, 0)
         return options
 
     def render(  # type: ignore[override]
@@ -174,22 +154,32 @@ class CppBmmTemplate(CppPackedGemmTemplate):
         epilogue_nodes: Optional[List[ir.IRNode]] = None,
         **kwargs,
     ) -> str:
-        options = self.get_options(kernel, template_buffer_node, epilogue_nodes, **kwargs)
-        BX, BW, BY = options['BX'], options['BW'], options['BY']
-        X, W, Y = options['X'], options['W'], options['Y']
-        buffer_aliases = options['buffer_aliases']
+        options = self.get_options(
+            kernel, template_buffer_node, epilogue_nodes, **kwargs
+        )
+        BX, BW, BY = options["BX"], options["BW"], options["BY"]
+        X, W, Y = options["X"], options["W"], options["Y"]
+        buffer_aliases = options["buffer_aliases"]
 
-        kernel.set_args(inputs={"X": X, "W": W}, outputs={"Y": Y}, aliases=buffer_aliases)
+        kernel.set_args(
+            inputs={"X": X, "W": W}, outputs={"Y": Y}, aliases=buffer_aliases
+        )
         result = self._template_from_string(MICROKERNEL_DEF).render(**options)
-        result += self._template_from_string(BLOCKED_STUB+GEMM_TEMPLATE).render(**options)
+        result += self._template_from_string(BLOCKED_STUB + GEMM_TEMPLATE).render(
+            **options
+        )
         self.thread_blocking.clear_cache(self)
         self.cache_blocking.clear_cache(self)
         tmp_num_threads = self.num_threads
         self.num_threads = 1
-        result += self._template_from_string(SINGLE_THREAD_STUB+GEMM_TEMPLATE).render(**{**options, 'num_threads': 1})
+        result += self._template_from_string(SINGLE_THREAD_STUB + GEMM_TEMPLATE).render(
+            **{**options, "num_threads": 1}
+        )
         self.thread_blocking.clear_cache(self)
         self.cache_blocking.clear_cache(self)
         self.num_threads = tmp_num_threads
-        kernel.set_args(inputs={"BX": BX, "BW": BW}, outputs={"BY": BY}, aliases=buffer_aliases)
+        kernel.set_args(
+            inputs={"BX": BX, "BW": BW}, outputs={"BY": BY}, aliases=buffer_aliases
+        )
         result += self._template_from_string(BMM_WRAPPER).render(**options)
         return result
