@@ -4,36 +4,30 @@ from typing import Callable, List, Optional
 from .. import ir
 
 from ..select_algorithm import DataProcessorTemplateWrapper
-from .cpp_gemm_template import CppPackedGemmTemplate, GEMM_TEMPLATE
+from .cpp_gemm_template import CppPackedGemmTemplate, GEMM_TEMPLATE, MICROKERNEL_DEF
 
 from .cpp_template_kernel import CppTemplateKernel
 from .cpp_utils import GemmBlocking
 
-MICROKERNEL_DEF = r"""
-{{template.header().getvalue()}}
-
-{{micro_gemm.codegen_define(kernel)}}
-"""
-
-SINGLE_THREAD_STUB = r"""
+GEMM_SINGLE_THREAD_MM_STUB = r"""
 void single_thread_mm(
     const {{micro_gemm.get_common_options()['input_t']}}* X,
     const {{micro_gemm.get_common_options()['input_t']}}* W,
     {{micro_gemm.get_common_options()['input_t']}}* Y
     {%- if is_dynamic_M %},
     const int64_t {{kernel.size(GemmOut, -2, unwrapped=True)}}
-    {% endif %}
+    {%- endif %}
 )
 """
 
-BLOCKED_STUB = r"""
+GEMM_THREADED_MM_STUB = r"""
 void blocked_mm(
     const {{micro_gemm.get_common_options()['input_t']}}* X,
     const {{micro_gemm.get_common_options()['input_t']}}* W,
     {{micro_gemm.get_common_options()['input_t']}}* Y
     {%- if is_dynamic_M %},
     const int64_t {{kernel.size(GemmOut, -2, unwrapped=True)}}
-    {% endif %}
+    {%- endif %}
 )
 """
 
@@ -57,7 +51,7 @@ extern "C"
             &{{kernel.index(BY, ["b_start", 0, 0])}}
             {%- if is_dynamic_M %},
             {{kernel.size(GemmOut, -2)}}
-            {% endif %}
+            {%- endif %}
         );
     }
     for (int64_t b_start = B_single_thread_block; b_start < B; ++b_start) {
@@ -67,7 +61,7 @@ extern "C"
             &{{kernel.index(BY, ["b_start", 0, 0])}}
             {%- if is_dynamic_M %},
             {{kernel.size(GemmOut, -2)}}
-            {% endif %}
+            {%- endif %}
         );
     }
 }
@@ -140,7 +134,6 @@ class CppBmmTemplate(CppPackedGemmTemplate):
         options = super().get_options(
             kernel, template_buffer_node, epilogue_nodes, **kwargs
         )
-        options["should_pack_weights"] = self.should_pack_weights
         BX, BW, BY = options["X"], options["W"], options["Y"]
         options["BX"], options["BW"], options["BY"] = BX, BW, BY
         for kword in ["X", "W", "Y", "GemmOut", "Y_2d"]:
@@ -165,10 +158,10 @@ class CppBmmTemplate(CppPackedGemmTemplate):
             inputs={"X": X, "W": W}, outputs={"Y": Y}, aliases=buffer_aliases
         )
         result = self._template_from_string(MICROKERNEL_DEF).render(**options)
-        result += self._template_from_string(BLOCKED_STUB + GEMM_TEMPLATE).render(
+        result += self._template_from_string(GEMM_THREADED_MM_STUB + GEMM_TEMPLATE).render(
             **options
         )
-        result += self._template_from_string(SINGLE_THREAD_STUB + GEMM_TEMPLATE).render(
+        result += self._template_from_string(GEMM_SINGLE_THREAD_MM_STUB + GEMM_TEMPLATE).render(
             **{**options, "num_threads": 1}
         )
         kernel.set_args(
