@@ -1,12 +1,8 @@
 # mypy: allow-untyped-defs
-<<<<<<< HEAD
 import contextlib
-from typing import Any, Callable, cast, List, Optional, Set, Union
+from typing import Any, Callable, cast, Dict, List, Optional, Set, Union
 from unittest.mock import patch
-=======
-from typing import Any, Callable, cast, List, Optional, Union
 from functools import lru_cache
->>>>>>> Fix thread_blocking, etc
 
 import torch
 import torch.utils
@@ -500,7 +496,7 @@ class CppPackedGemmTemplate(CppTemplate):
         template_buffer_node: Optional[ir.CppTemplateBuffer] = None,
         epilogue_nodes: Optional[List[ir.IRNode]] = None,
         **kwargs,
-    ) -> dict[str, Any]:
+    ) -> Dict[str, Any]:
         assert len(self.input_nodes) >= 2
 
         int8_gemm = self.input_nodes[0].get_dtype() == torch.uint8
