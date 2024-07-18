@@ -1189,6 +1189,7 @@ def use_cpp_gemm_template(layout, mat1, mat2, require_constant_mat2=True):
         and mat1.get_stride()[-1] == 1  # TODO(jgong5): support transposed input
         and isinstance(mat2, ir.StorageBox)
         and (mat2.is_module_buffer() or not require_constant_mat2)
+        and mat1.get_name() != mat2.get_name()
     )
 
 

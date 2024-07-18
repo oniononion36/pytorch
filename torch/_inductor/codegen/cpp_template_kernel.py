@@ -128,8 +128,7 @@ class CppTemplateKernel(CppKernel):
         return cexpr_index(self.rename_indexing(sizes[dim]))
 
     def stride(self, node: ir.Buffer, dim: int) -> str:
-        stride = node.get_stride() if hasattr(node, 'get_stride') else node.layout.stride
-        return cexpr_index(self.rename_indexing(stride[dim]))
+        return cexpr_index(self.rename_indexing(node.layout.stride[dim]))
 
     def index(self, node: ir.Buffer, indices: List[Any]) -> str:
         indexer = node.layout.as_fixed().make_indexer()
@@ -159,17 +158,17 @@ class CppTemplateKernel(CppKernel):
         assert isinstance(sliced.data, ir.ReinterpretView) or isinstance(sliced.data, ir.SliceView), sliced.data
         if isinstance(sliced.data, ir.SliceView):
             layout = sliced.get_layout()
-            layout_size = len(sliced.data.size)
+            layout_size = len(sliced.data.shape)
             layout = ir.FixedLayout(
                 layout.device,
                 layout.dtype,
-                layout.size[-layout_size:],
+                sliced.data.shape,
                 layout.stride[-layout_size:]
             )
             sliced.data.layout = layout
         return sliced.data
 
-    def select(self, node, dim: int, idx: int) -> ir.ReinterpretView:
+    def select(self, node, dim: int, idx: int) -> ir.ReinterpretView | ir.View:
         wrapped_node = wrap_with_tensorbox(node)
         sliced = L.select(wrapped_node, dim, idx)
         assert isinstance(sliced.data, ir.ReinterpretView) or isinstance(sliced.data, ir.View), sliced.data

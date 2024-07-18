@@ -253,7 +253,6 @@ class CppPackedGemmTemplate(CppTemplate):
     ):
         if input_indices is None:
             input_indices = list(range(len(input_nodes)))
-        ### MAKE something where if the index matches, then you change input indices to match? Something like that.
 
         def reorder_and_filter(inputs, layout_or_out):
             if has_bias:

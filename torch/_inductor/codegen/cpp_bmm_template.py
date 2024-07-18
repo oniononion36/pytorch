@@ -12,7 +12,7 @@ from .cpp_utils import GemmBlocking
 GEMM_SINGLE_THREAD_MM_STUB = r"""
 void single_thread_mm(
     const {{micro_gemm.get_common_options()['input_t']}}* X,
-    const {{micro_gemm.get_common_options()['input_t']}}* W,
+    const {{micro_gemm.get_common_options()['input2_t']}}* W,
     {{micro_gemm.get_common_options()['input_t']}}* Y
     {%- if is_dynamic_M %},
     const int64_t {{kernel.size(GemmOut, -2, unwrapped=True)}}
@@ -21,9 +21,9 @@ void single_thread_mm(
 """
 
 GEMM_THREADED_MM_STUB = r"""
-void blocked_mm(
+void threaded_mm(
     const {{micro_gemm.get_common_options()['input_t']}}* X,
-    const {{micro_gemm.get_common_options()['input_t']}}* W,
+    const {{micro_gemm.get_common_options()['input2_t']}}* W,
     {{micro_gemm.get_common_options()['input_t']}}* Y
     {%- if is_dynamic_M %},
     const int64_t {{kernel.size(GemmOut, -2, unwrapped=True)}}
@@ -55,7 +55,7 @@ extern "C"
         );
     }
     for (int64_t b_start = B_single_thread_block; b_start < B; ++b_start) {
-        blocked_mm(
+        threaded_mm(
             &{{kernel.index(BX, ["b_start", 0, 0])}},
             &{{kernel.index(BW, ["b_start", 0, 0])}},
             &{{kernel.index(BY, ["b_start", 0, 0])}}
