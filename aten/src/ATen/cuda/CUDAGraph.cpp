@@ -13,6 +13,27 @@
 
 namespace at::cuda {
 
+namespace {
+cudaStream_t create_external_stream() {
+  // From:
+  // https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__STREAM.html#group__CUDART__STREAM_1g793d7d4e474388ddfda531603dc34aa3
+  // "Capture must be ended on the same stream in which it was initiated, and it
+  // may only be initiated if the stream is not already in capture mode."
+
+  // Since pytorch uses a pool of 32 pre-allocated cuda streams,
+  // should a user nest 32 conditional nodes, there would be an error
+  // for the 32nd node, since that node's stream would already be in
+  // capture mode. The easiest solution is to handle stream creation
+  // and deletion ourselves.
+
+  // Be sure to call cudaStreamDestroy on this when it is finished
+  // being used.
+  cudaStream_t child_stream;
+  AT_CUDA_CHECK(cudaStreamCreate(&child_stream));
+  return child_stream;
+}
+} // anonymous namespace
+
 static bool _cuda_graphs_debug = false;
 constexpr int kSynchronizeBusyWaitMillis = 10;
 
@@ -412,18 +433,7 @@ void CUDAGraph::begin_capture_to_if_node(
   AT_CUDA_CHECK(cudaStreamUpdateCaptureDependencies(
       getCurrentCUDAStream(), &cond_node, 1, cudaStreamSetCaptureDependencies));
 
-  // From:
-  // https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__STREAM.html#group__CUDART__STREAM_1g793d7d4e474388ddfda531603dc34aa3
-  // "Capture must be ended on the same stream in which it was initiated, and it
-  // may only be initiated if the stream is not already in capture mode."
-
-  // Since pytorch uses a pool of 32 pre-allocated cuda streams,
-  // should a user nest 32 conditional nodes, there would be an error
-  // for the 32nd node, since that node's stream would already be in
-  // capture mode. The easiest solution is to handle stream creation
-  // and deletion ourselves.
-  cudaStream_t child_stream;
-  AT_CUDA_CHECK(cudaStreamCreate(&child_stream));
+  cudaStream_t child_stream = create_external_stream();
   conditional_graph_capture_streams_ids_.push(-1);
   c10::cuda::CUDACachingAllocator::endAllocateToPool(capture_dev_, mempool_id_);
   c10::cuda::CUDACachingAllocator::beginAllocateToPool(
@@ -455,11 +465,10 @@ cudaGraphConditionalHandle CUDAGraph::begin_capture_to_while_loop_node(
       getCurrentCUDAStream(), &status, nullptr, &currently_capturing_graph));
   TORCH_CHECK(
       status == cudaStreamCaptureStatusActive,
-      "capture_begin() must be called before begin_capture_to_if_node");
+      "capture_begin() must be called before begin_capture_to_while_loop_node()");
   cudaGraphConditionalHandle handle;
   AT_CUDA_CHECK(cudaGraphConditionalHandleCreate(
       &handle, currently_capturing_graph, 0, 0));
-  conditional_handles_.push(handle);
 
   set_conditional_handle(handle, scalar_cuda_pred_tensor);
 
@@ -493,18 +502,7 @@ cudaGraphConditionalHandle CUDAGraph::begin_capture_to_while_loop_node(
   AT_CUDA_CHECK(cudaStreamUpdateCaptureDependencies(
       getCurrentCUDAStream(), &cond_node, 1, cudaStreamSetCaptureDependencies));
 
-  // From:
-  // https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__STREAM.html#group__CUDART__STREAM_1g793d7d4e474388ddfda531603dc34aa3
-  // "Capture must be ended on the same stream in which it was initiated, and it
-  // may only be initiated if the stream is not already in capture mode."
-
-  // Since pytorch uses a pool of 32 pre-allocated cuda streams,
-  // should a user nest 32 conditional nodes, there would be an error
-  // for the 32nd node, since that node's stream would already be in
-  // capture mode. The easiest solution is to handle stream creation
-  // and deletion ourselves.
-  cudaStream_t child_stream;
-  AT_CUDA_CHECK(cudaStreamCreate(&child_stream));
+  cudaStream_t child_stream = create_external_stream();
   conditional_graph_capture_streams_ids_.push(-1);
   c10::cuda::CUDACachingAllocator::endAllocateToPool(capture_dev_, mempool_id_);
   c10::cuda::CUDACachingAllocator::beginAllocateToPool(
