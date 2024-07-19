@@ -662,7 +662,7 @@ class CppPackedGemmTemplate(CppTemplate):
             w_zp=w_zp,
             acc_buf_dtype=torch.int32 if int8_gemm else torch.float,
         )
-        return options
+        return options, fake_buffers
 
     def render(  # type: ignore[override, return]
         self,
@@ -671,7 +671,7 @@ class CppPackedGemmTemplate(CppTemplate):
         epilogue_nodes: Optional[List[ir.IRNode]] = None,
         **kwargs,
     ) -> str:
-        options = self.get_options(
+        options, fake_buffers = self.get_options(
             kernel, template_buffer_node, epilogue_nodes, **kwargs
         )
 

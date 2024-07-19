@@ -1,19 +1,21 @@
 # mypy: allow-untyped-defs
+import contextlib
 from typing import Callable, List, Optional
+from unittest.mock import patch
 
 from .. import ir
-
 from ..select_algorithm import DataProcessorTemplateWrapper
-from .cpp_gemm_template import CppPackedGemmTemplate, GEMM_TEMPLATE, MICROKERNEL_DEF
+from ..virtualized import V
 
+from .cpp_gemm_template import CppPackedGemmTemplate, GEMM_TEMPLATE, MICROKERNEL_DEF
 from .cpp_template_kernel import CppTemplateKernel
-from .cpp_utils import GemmBlocking
+from .cpp_utils import DTYPE_TO_CPP, GemmBlocking
 
 GEMM_SINGLE_THREAD_MM_STUB = r"""
 void single_thread_mm(
-    const {{micro_gemm.get_common_options()['input_t']}}* X,
-    const {{micro_gemm.get_common_options()['input2_t']}}* W,
-    {{micro_gemm.get_common_options()['input_t']}}* Y
+    const {{X_dtype}}* X,
+    const {{W_dtype}}* W,
+    {{Y_dtype}}* Y
     {%- if is_dynamic_M %},
     const int64_t {{kernel.size(GemmOut, -2, unwrapped=True)}}
     {%- endif %}
@@ -22,9 +24,9 @@ void single_thread_mm(
 
 GEMM_THREADED_MM_STUB = r"""
 void threaded_mm(
-    const {{micro_gemm.get_common_options()['input_t']}}* X,
-    const {{micro_gemm.get_common_options()['input2_t']}}* W,
-    {{micro_gemm.get_common_options()['input_t']}}* Y
+    const {{X_dtype}}* X,
+    const {{W_dtype}}* W,
+    {{Y_dtype}}* Y
     {%- if is_dynamic_M %},
     const int64_t {{kernel.size(GemmOut, -2, unwrapped=True)}}
     {%- endif %}
@@ -33,7 +35,7 @@ void threaded_mm(
 
 BMM_WRAPPER = r"""
 extern "C"
-{{kernel.def_kernel(inputs={"BX": BX, "BW": BW}, outputs={"BY": BY}, aliases=buffer_aliases)}}
+{{kernel.def_kernel(inputs={"BX": BX, "BW": BW}, outputs={"BY": BY}, aliases=aliases)}}
 {
     const int64_t B = {{kernel.size(BY, -3, unwrapped=True)}};
     {%- if num_threads > 1 %}
@@ -131,14 +133,16 @@ class CppBmmTemplate(CppPackedGemmTemplate):
         return [reindexer]
 
     def get_options(self, kernel, template_buffer_node, epilogue_nodes, **kwargs):
-        options = super().get_options(
+        options, fake_buffers = super().get_options(
             kernel, template_buffer_node, epilogue_nodes, **kwargs
         )
         BX, BW, BY = options["X"], options["W"], options["Y"]
         options["BX"], options["BW"], options["BY"] = BX, BW, BY
         for kword in ["X", "W", "Y", "GemmOut", "Y_2d"]:
             options[kword] = kernel.select(options[kword], 0, 0)
-        return options
+        for kword in ["X", "W", "Y"]:
+            options[kword + '_dtype'] = DTYPE_TO_CPP[options[kword].dtype]
+        return options, fake_buffers
 
     def render(  # type: ignore[override]
         self,
@@ -147,25 +151,30 @@ class CppBmmTemplate(CppPackedGemmTemplate):
         epilogue_nodes: Optional[List[ir.IRNode]] = None,
         **kwargs,
     ) -> str:
-        options = self.get_options(
+        options, fake_buffers = self.get_options(
             kernel, template_buffer_node, epilogue_nodes, **kwargs
         )
         BX, BW, BY = options["BX"], options["BW"], options["BY"]
         X, W, Y = options["X"], options["W"], options["Y"]
-        buffer_aliases = options["buffer_aliases"]
+        aliases = options["aliases"]
 
-        kernel.set_args(
-            inputs={"X": X, "W": W}, outputs={"Y": Y}, aliases=buffer_aliases
-        )
-        result = self._template_from_string(MICROKERNEL_DEF).render(**options)
-        result += self._template_from_string(
-            GEMM_THREADED_MM_STUB + GEMM_TEMPLATE
-        ).render(**options)
-        result += self._template_from_string(
-            GEMM_SINGLE_THREAD_MM_STUB + GEMM_TEMPLATE
-        ).render(**{**options, "num_threads": 1})
-        kernel.set_args(
-            inputs={"BX": BX, "BW": BW}, outputs={"BY": BY}, aliases=buffer_aliases
-        )
-        result += self._template_from_string(BMM_WRAPPER).render(**options)
-        return result
+        with contextlib.ExitStack() as stack:
+            for buf in fake_buffers:
+                stack.enter_context(
+                    patch.object(V.graph, "get_dtype", self._fake_get_dtype(buf))
+                )
+            kernel.set_args(
+                inputs={"X": X, "W": W}, outputs={"Y": Y}, aliases=aliases
+            )
+            result = self._template_from_string(MICROKERNEL_DEF).render(**options)
+            result += self._template_from_string(
+                GEMM_THREADED_MM_STUB + GEMM_TEMPLATE
+            ).render(**options)
+            result += self._template_from_string(
+                GEMM_SINGLE_THREAD_MM_STUB + GEMM_TEMPLATE
+            ).render(**{**options, "num_threads": 1})
+            kernel.set_args(
+                inputs={"BX": BX, "BW": BW}, outputs={"BY": BY}, aliases=aliases
+            )
+            result += self._template_from_string(BMM_WRAPPER).render(**options)
+            return result
