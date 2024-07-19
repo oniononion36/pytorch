@@ -494,16 +494,16 @@ class TS2FXGraphConverter:
         output_name = node.output().debugName()
         self.name_to_attribute_fqn[output_name] = attr_fqn
 
-        def is_script_object(fqn):
-            return fqn in self.name_to_constant and isinstance(
-                self.name_to_constant[fqn], torch.ScriptObject
+        def _should_be_get_attr(fqn):
+            return (
+                fqn in self.name_to_buffer_map
+                or fqn in self.name_to_param_map
+                or (fqn in self.name_to_constant
+                and isinstance(self.name_to_constant[fqn], torch.ScriptObject))
             )
 
-        attr_value = node.output()
         if self.is_top_level_graph():
-            if attr_value.type().annotation_str == "Tensor" or is_script_object(
-                attr_fqn
-            ):
+            if _should_be_get_attr(attr_fqn):
                 # We insert a get_attr node due to two reasons.
                 # First, ts graph does not lift tensor constants as input nodes. So
                 # tensor constants may be ignored by in convert_graph_inputs().
@@ -521,9 +521,7 @@ class TS2FXGraphConverter:
         else:
             # Special support for if blocks which do not allow SetAttr TorchScript
             # node and get_attr FX Graph Node.
-            if attr_value.type().annotation_str == "Tensor" or is_script_object(
-                attr_fqn
-            ):
+            if _should_be_get_attr(attr_fqn):
                 self.name_to_node[output_name] = self.name_to_node[attr_fqn]
 
     def convert_prim_SetAttr(self, node: torch._C.Node):

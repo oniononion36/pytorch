@@ -1089,7 +1089,7 @@ class TestConverter(TestCase):
         self._check_equal_ts_ep_converter(M(), inp)
 
     def test_convert_script_object(self):
-        class M(torch.nn.Module):
+        class M1(torch.nn.Module):
             def __init__(self):
                 super().__init__()
                 self.tq = _empty_tensor_queue()
@@ -1099,8 +1099,42 @@ class TestConverter(TestCase):
                 torch.ops._TorchScriptTesting.queue_push(self.tq, x.cos())
                 return torch.ops._TorchScriptTesting.queue_pop(self.tq), self.tq.pop()
 
-        inp = (torch.randn(2, 3),)
-        self._check_equal_ts_ep_converter(M(), inp, ["script"])
+        class M2(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.conv2 = torch.nn.Conv2d(1, 1, 1)
+
+            def forward(self, x):
+                x = self.conv2(x)
+                return x
+
+        class M2Nested(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.quant = torch.ao.quantization.QuantStub()
+                self.conv1 = torch.nn.Conv2d(1, 1, 1)
+                self.child = M2()
+                self.dequant = torch.ao.quantization.DeQuantStub()
+
+            def forward(self, x):
+                x = self.quant(x)
+                x = self.conv1(x)
+                x = self.child(x)
+                x = self.dequant(x)
+                return x
+
+        # inp = (torch.randn(2, 3),)
+        # self._check_equal_ts_ep_converter(M1(), inp, ["script"])
+
+        from torch.testing._internal.common_quantized import override_quantized_engine
+        with override_quantized_engine('qnnpack'):
+            inp = (torch.randn(4, 1, 4, 4),)
+            m2 = M2Nested()
+            m2.qconfig = torch.ao.quantization.get_default_qconfig("qnnpack")
+            torch.ao.quantization.prepare(m2, inplace=True)
+            m2(inp[0])
+            torch.ao.quantization.convert(m2, inplace=True)
+            self._check_equal_ts_ep_converter(m2, inp, ["script"])
 
 
 if __name__ == "__main__":
