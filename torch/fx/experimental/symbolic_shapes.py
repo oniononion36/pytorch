@@ -16,6 +16,7 @@ import itertools
 import logging
 import math
 import operator
+import os
 import re
 import sys
 import threading
@@ -5482,3 +5483,133 @@ class PropagateUnbackedSymInts(torch.fx.Interpreter):
         result = super().run_node(n)
         rebind_unbacked(detect_fake_mode().shape_env, n, result)
         return result
+
+
+def _parse_data_dependent_expr(e):
+    def _floor(x):
+        # sympy parsing transforms something like `a // b` into something like
+        # `sympy.floor((1/b) * a)`, which we need to transform back to `a // b`
+        if isinstance(x, sympy.Mul):
+            a, b = x.args
+            if isinstance(a, sympy.Rational):
+                return FloorDiv(a.p * b, a.q)
+        return sympy.floor(x)
+
+    # find the unresolved condition on unbacked symints in the error message
+    match = re.search(r"data-dependent expression (.+) \(unhinted", e.args[0])
+
+    # parse it to a sympy expression
+    return sympy.sympify(match.group(1)).replace(sympy.floor, _floor)
+
+
+def _blame_user_code(e, frame):
+    frame_summary = traceback.FrameSummary(
+        frame.f_code.co_filename,
+        frame.f_lineno,
+        frame.f_code.co_name,
+    )
+    msg = e.args[0]
+    msg += (
+        '\n\nUser code:\n' +
+        ''.join(traceback.StackSummary.from_list([frame_summary]).format())
+    )
+    e.args = (msg,)
+
+
+class _PythonPrinter(sympy.printing.str.StrPrinter):
+    """
+    Util printer that replaces sympy symbols with their source-level names
+    and renders sympy relational operators (e.g., Eq, Ne, Ge, Le) inline
+    (i.e., as ==, !=, >, <).
+    """
+
+    def __init__(self, src_map):
+        super().__init__()
+        self.src_map = src_map
+
+    def _print_Symbol(self, sym):
+        return self.src_map[sym.name]
+
+    def _print_Relational(self, expr):
+        lhs = self.parenthesize(expr.lhs, sympy.printing.precedence.precedence(expr))
+        rel_op = expr.rel_op
+        rhs = self.parenthesize(expr.rhs, sympy.printing.precedence.precedence(expr))
+        return f"{lhs} {rel_op} {rhs}"
+
+
+def _suggest_torch_checks(e, cond, src_map):
+    printer = _PythonPrinter(src_map)
+    msg = e.args[0]
+    msg += "\nSuggested fixes (please choose one of the following):"
+    # suggested fixes to resolve `cond`` are to tell the compiler to assume
+    # either `cond` or its negation (the user will need to select which)
+    suggested_fixes = [
+        f"torch._check({printer.doprint(cond)})",
+        f"torch._check({printer.doprint(sympy.Not(cond))})",
+    ]
+    for i, fix in enumerate(suggested_fixes):
+        msg += f"\n  {i+1}. {fix}"
+    e.args = (msg,)
+
+
+def _suggest_fixes_for_data_dependent_error_non_strict(e):
+    """
+    Given a raised data-dependent error, add the following to the error message:
+    1. the closest user code location that raised the error;
+    2. suggested fixes for the error in terms of live variables at that location.
+    """
+
+    frame = inspect.currentframe()
+    while frame is not None:
+        # walk the stack up from the data-dependent error until a non-torch frame is found
+        if not frame.f_code.co_filename.startswith(os.path.dirname(inspect.getfile(torch))):
+            # add frame info to error message
+            _blame_user_code(e, frame)
+
+            # extract the unresolved condition on unbacked symints in the error message
+            cond = _parse_data_dependent_expr(e)
+
+            # map symbol names reachable via frame locals to their source-level names
+            # (used later to replace unbacked symints in the unresolved condition)
+            src_map = {}
+            for var, val in frame.f_locals.items():
+                # figure out how to access any symbol inside `val` through `var`
+                for path, leaf in pytree.tree_leaves_with_path(val):
+                    name = var + pytree.keystr(path)
+                    if isinstance(leaf, torch.SymInt):
+                        src_map[str(leaf.node.expr)] = name
+                    elif isinstance(leaf, torch.Tensor):
+                        for i, dim in enumerate(leaf.shape):
+                            if isinstance(dim, torch.SymInt):
+                                src_map[str(dim.node.expr)] = f"{name}.shape[{i}]"
+
+            # add suggested torch.check()s based on `cond` and `src_map` to error message
+            _suggest_torch_checks(e, cond, src_map)
+            break
+        frame = frame.f_back
+
+
+class DataDependentErrorHandlerNonStrict(torch.overrides.TorchFunctionMode):
+    """
+    Handles data-dependent errors raised by torch function calls.
+
+    Any data-dependent error is due to some condition on unbacked symints
+    that cannot be resolved. A mechanical way of fixing the error is to use
+    a torch._check() call to assert either that condition or its negation.
+    The handler suggests these options as code and points to the location
+    of the torch function call that raised the error as part of the error
+    message shown to the user, who can then simply select and copy-paste
+    a suggested fix at that location.
+
+    NOTE: Not all data-dependent errors are raised by torch function calls.
+    In particular, conditions on unbacked symints can appear outside such
+    calls, and as such are not handled here.
+    """
+
+    def __torch_function__(self, func, types, args=(), kwargs=None):
+        kwargs = kwargs or {}
+        try:
+            return func(*args, **kwargs)
+        except GuardOnDataDependentSymNode as e:
+            _suggest_fixes_for_data_dependent_error_non_strict(e)
+            raise

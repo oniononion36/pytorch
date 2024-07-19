@@ -54,6 +54,7 @@ from torch.fx._utils import first_call_function_nn_module_stack
 from torch.fx.experimental.proxy_tensor import make_fx
 from torch.fx.experimental.symbolic_shapes import (
     ConstraintViolationError,
+    DataDependentErrorHandlerNonStrict,
     free_unbacked_symbols,
     GuardOnDataDependentSymNode,
     ShapeEnv,
@@ -1654,7 +1655,7 @@ def _non_strict_export(
             _is_torch_jit_trace=_is_torch_jit_trace,
         )
 
-    with fake_mode:
+    with fake_mode, DataDependentErrorHandlerNonStrict():
         with _fakify_script_objects(mod, fake_args, fake_kwargs, fake_mode) as (
             patched_mod,
             new_fake_args,
