@@ -1,8 +1,8 @@
 # mypy: allow-untyped-defs
 import contextlib
+from functools import lru_cache
 from typing import Any, Callable, cast, Dict, List, Optional, Set, Union
 from unittest.mock import patch
-from functools import lru_cache
 
 import torch
 import torch.utils
@@ -11,7 +11,7 @@ from .. import ir, lowering as L
 
 from ..kernel.mm_common import mm_args
 from ..select_algorithm import DataProcessorTemplateWrapper
-from ..utils import cache_on_self, has_free_symbols, parallel_num_threads
+from ..utils import has_free_symbols, parallel_num_threads
 from ..virtualized import ops, V
 from .cpp_micro_gemm import CppMicroGemmAMX, create_micro_gemm, LayoutType
 from .cpp_template import CppTemplate
@@ -216,19 +216,13 @@ class CppPackedGemmTemplate(CppTemplate):
         assert len(factors) > 0
         for factor in factors:
             if n_blocks % factor == 0 and m_blocks % (num_threads // factor) == 0:
-                return get_blocking(
-                    num_threads, factor, m_blocks, n_blocks, k_blocks
-                )
+                return get_blocking(num_threads, factor, m_blocks, n_blocks, k_blocks)
         for factor in factors:
             if n_blocks % factor == 0:
-                return get_blocking(
-                    num_threads, factor, m_blocks, n_blocks, k_blocks
-                )
+                return get_blocking(num_threads, factor, m_blocks, n_blocks, k_blocks)
             cofactor = num_threads // factor
             if m_blocks % cofactor == 0:
-                return get_blocking(
-                    num_threads, factor, m_blocks, n_blocks, k_blocks
-                )
+                return get_blocking(num_threads, factor, m_blocks, n_blocks, k_blocks)
         raise AssertionError("Should not reach here.")
 
     def cache_blocking(self, num_threads) -> GemmBlocking:

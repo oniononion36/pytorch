@@ -142,7 +142,7 @@ class CppTemplateKernel(CppKernel):
         )
         return f"{inner_name}[{cexpr_index(index)}]"
 
-    def slice_nd(self, node, ranges: List[Tuple[Any, Any]]) -> ir.ReinterpretView:
+    def slice_nd(self, node, ranges: List[Tuple[Any, Any]]) -> Union[ir.ReinterpretView, ir.SliceView]:
         """
         Slice the given node with a list of ranges (start and end) corresponding to its dims.
         The dim is not sliced if the corresponding range is empty.
@@ -155,7 +155,6 @@ class CppTemplateKernel(CppKernel):
             assert len(_range) == 2
             start, end = parse_expr_with_index_symbols(_range)
             sliced = L.slice_(sliced, dim, start, end, clamp=False)
-        assert isinstance(sliced.data, ir.ReinterpretView) or isinstance(sliced.data, ir.SliceView), sliced.data
         if isinstance(sliced.data, ir.SliceView):
             layout = sliced.get_layout()
             layout_size = len(sliced.data.shape)
@@ -163,15 +162,16 @@ class CppTemplateKernel(CppKernel):
                 layout.device,
                 layout.dtype,
                 sliced.data.shape,
-                layout.stride[-layout_size:]
+                layout.stride[-layout_size:],
             )
             sliced.data.layout = layout
+        assert isinstance(sliced.data, (ir.ReinterpretView, ir.SliceView)), sliced.data
         return sliced.data
 
-    def select(self, node, dim: int, idx: int) -> ir.ReinterpretView | ir.View:
+    def select(self, node, dim: int, idx: int) -> Union[ir.ReinterpretView, ir.View]:
         wrapped_node = wrap_with_tensorbox(node)
         sliced = L.select(wrapped_node, dim, idx)
-        assert isinstance(sliced.data, ir.ReinterpretView) or isinstance(sliced.data, ir.View), sliced.data
+        assert isinstance(sliced.data, (ir.ReinterpretView, ir.View)), sliced.data
         return sliced.data
 
     def view(self, node, sizes: List[Any]) -> ir.View:

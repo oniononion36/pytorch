@@ -158,12 +158,12 @@ class CppBmmTemplate(CppPackedGemmTemplate):
             inputs={"X": X, "W": W}, outputs={"Y": Y}, aliases=buffer_aliases
         )
         result = self._template_from_string(MICROKERNEL_DEF).render(**options)
-        result += self._template_from_string(GEMM_THREADED_MM_STUB + GEMM_TEMPLATE).render(
-            **options
-        )
-        result += self._template_from_string(GEMM_SINGLE_THREAD_MM_STUB + GEMM_TEMPLATE).render(
-            **{**options, "num_threads": 1}
-        )
+        result += self._template_from_string(
+            GEMM_THREADED_MM_STUB + GEMM_TEMPLATE
+        ).render(**options)
+        result += self._template_from_string(
+            GEMM_SINGLE_THREAD_MM_STUB + GEMM_TEMPLATE
+        ).render(**{**options, "num_threads": 1})
         kernel.set_args(
             inputs={"BX": BX, "BW": BW}, outputs={"BY": BY}, aliases=buffer_aliases
         )

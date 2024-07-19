@@ -288,7 +288,7 @@ class TestSelectAlgorithm(BaseTestSelectAlgorithm):
     @torch.no_grad
     @unittest.skipIf(not TEST_MKL, "Test requires MKL")
     def test_bmm_self_permute(self):
-        #TODO(frost-intel): Support cpp_bmm when input is a single buffer for A and B
+        # TODO(frost-intel): Support cpp_bmm when input is a single buffer for A and B
         dtype = torch.float
         bs = 4
         Mdim = 9
@@ -299,7 +299,7 @@ class TestSelectAlgorithm(BaseTestSelectAlgorithm):
                 super().__init__()
 
             def forward(self, x):
-                return x @ x.permute(0,2,1)
+                return x @ x.permute(0, 2, 1)
 
         counters.clear()
         u = torch.randn(bs, Mdim, Kdim).to(dtype=dtype)
