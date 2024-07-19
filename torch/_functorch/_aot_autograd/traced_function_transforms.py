@@ -685,14 +685,31 @@ def aot_dispatch_subclass(
             grad_inputs = wrapped_outs[1]
             subclass_meta.grad_input_metas = create_subclass_meta(grad_inputs)
 
+            bw_out = unwrap_tensor_subclasses(
+                wrapped_outs[1],
+                subclass_metas=None,
+                is_joint_structure=False,
+                is_runtime=False,
+                append_extra=True,
+            )
+            wrapped_outs = (wrapped_outs[0], bw_out)
+
         # Step 3: Unwrap any subclass outputs back into dense tensors
         unwrapped_outs = unwrap_tensor_subclasses(
-            wrapped_outs, is_joint_structure=use_trace_joint
+            wrapped_outs,
+            subclass_metas=None,
+            is_joint_structure=use_trace_joint,
+            is_runtime=False,
+            append_extra=True,
         )
         return unwrapped_outs
 
     def joint_fn(primals, tangents):
-        return inner_fn(flat_fn_maybe_joint, (primals, tangents), use_trace_joint=True)
+        return inner_fn(
+            flat_fn_maybe_joint,
+            (primals, tangents),
+            use_trace_joint=True,
+        )
 
     def fw_fn(*primals):
         return inner_fn(flat_fn_maybe_joint, primals, use_trace_joint=False)
@@ -701,7 +718,11 @@ def aot_dispatch_subclass(
         return inner_fn(fw_only, primals, use_trace_joint=False)
 
     args_unwrapped = unwrap_tensor_subclasses(
-        args, is_joint_structure=is_joint_structure
+        args,
+        subclass_metas=None,
+        is_joint_structure=is_joint_structure,
+        is_runtime=False,
+        append_extra=True,
     )
     remapped_static_indices = remap_unwrapped_subclass_arg_indices(
         args, meta.static_input_indices
@@ -728,7 +749,7 @@ def aot_dispatch_subclass(
     # However, the original ViewAndMutationMeta that we computed was created
     # on the subclass -> subclass graph,
     # which can have a different number of outputs than the dense -> dense graph.
-    # That's why we createa a fresh metadata object on the dense -> dense function here,
+    # That's why we created a fresh metadata object on the dense -> dense function here,
     # and plumb it back up to the partitioner.
     # See Note: [Partitioner handling for Subclasses, Part 2] for more info.
     meta_updated = run_functionalized_fw_and_collect_metadata(
