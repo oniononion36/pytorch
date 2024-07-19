@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Un
 from typing_extensions import deprecated
 
 import torch
-import torch._library as _library
+from torch import _library
 from torch._library.custom_ops import (
     _maybe_get_opdef,
     custom_op,
@@ -18,7 +18,7 @@ from torch._library.custom_ops import (
     device_types_t,
 )
 from torch._library.infer_schema import infer_schema  # noqa: F401
-from torch._ops import OpOverload
+from torch._ops import OpOverload, OpOverloadPacket
 
 
 __all__ = [
@@ -89,7 +89,7 @@ class Library:
         self.ns = ns
         self._op_defs: Set[str] = set()
         self._op_impls: Set[str] = set()
-        self._registration_handles: List[torch._library.utils.RegistrationHandle] = []
+        self._registration_handles: List[_library.utils.RegistrationHandle] = []
         self.kind = kind
         self.dispatch_key = dispatch_key
         # Use a finalizer to setup the "destructor" instead of __del__.
@@ -159,7 +159,7 @@ class Library:
 
     def _register_fake(self, op_name, fn, _stacklevel=1):
         r"""Registers the fake impl for an operator defined in the library."""
-        source = torch._library.utils.get_source(_stacklevel + 1)
+        source = _library.utils.get_source(_stacklevel + 1)
         frame = sys._getframe(_stacklevel)
         caller_module = inspect.getmodule(frame)
         # Can be none if you call register_fake from somewhere there isn't a module
@@ -174,7 +174,7 @@ class Library:
             caller_module_name = None
 
         qualname = f"{self.ns}::{op_name}"
-        entry = torch._library.simple_registry.singleton.find(qualname)
+        entry = _library.simple_registry.singleton.find(qualname)
         if caller_module_name is not None:
             func_to_register = _check_pystubs_once(fn, qualname, caller_module_name)
         else:
@@ -435,7 +435,7 @@ def define(qualname, schema, *, lib=None, tags=()):
             f"define(qualname, schema): expected qualname "
             f"to be instance of str, got {type(qualname)}"
         )
-    namespace, name = torch._library.utils.parse_namespace(qualname)
+    namespace, name = _library.utils.parse_namespace(qualname)
     if lib is None:
         lib = Library(namespace, "FRAGMENT")
         _keep_alive.append(lib)
@@ -512,7 +512,7 @@ def impl(qualname, types, func=None, *, lib=None):
             keys.add(_device_type_to_key(typ))
 
     def register(func):
-        namespace, _ = torch._library.utils.parse_namespace(qualname)
+        namespace, _ = _library.utils.parse_namespace(qualname)
         if lib is None:
             use_lib = Library(namespace, "FRAGMENT")
             _keep_alive.append(use_lib)
@@ -562,9 +562,7 @@ def impl_abstract(qualname, func=None, *, lib=None, _stacklevel=1):
     return register_fake(qualname, func, lib=lib, _stacklevel=_stacklevel)
 
 
-_op_identifier = Union[
-    str, "torch._ops.OpOverload", "torch._library.custom_ops.CustomOpDef"
-]
+_op_identifier = Union[str, OpOverload, CustomOpDef]
 
 
 def register_kernel(
@@ -615,11 +613,9 @@ def register_kernel(
 
     """
 
-    if not isinstance(
-        op, (str, torch._ops.OpOverload, torch._library.custom_ops.CustomOpDef)
-    ):
+    if not isinstance(op, (str, OpOverload, CustomOpDef)):
         raise ValueError("register_kernel(op): got unexpected type for op: {type(op)}")
-    if isinstance(op, torch._ops.OpOverload):
+    if isinstance(op, OpOverload):
         op = op._name
     opdef = _maybe_get_opdef(op)
     if opdef is not None:
@@ -718,11 +714,9 @@ def register_fake(
         >>> assert torch.allclose(trace(x), torch.ops.mylib.custom_nonzero(x))
 
     """
-    if not isinstance(
-        op, (str, torch._ops.OpOverload, torch._library.custom_ops.CustomOpDef)
-    ):
+    if not isinstance(op, (str, OpOverload, CustomOpDef)):
         raise ValueError("register_fake(op): got unexpected type for op: {type(op)}")
-    if isinstance(op, torch._ops.OpOverload):
+    if isinstance(op, OpOverload):
         op = op._name
     opdef = _maybe_get_opdef(op)
     if opdef is not None:
@@ -735,7 +729,7 @@ def register_fake(
     stacklevel = _stacklevel
 
     def register(func):
-        namespace, op_name = torch._library.utils.parse_namespace(op)
+        namespace, op_name = _library.utils.parse_namespace(op)
         if lib is None:
             use_lib = Library(namespace, "FRAGMENT")
             _keep_alive.append(use_lib)
@@ -834,13 +828,11 @@ def register_autograd(
         >>> assert torch.allclose(grad_x, torch.full_like(x, 3.14))
 
     """
-    if not isinstance(
-        op, (str, torch._ops.OpOverload, torch._library.custom_ops.CustomOpDef)
-    ):
+    if not isinstance(op, (str, OpOverload, CustomOpDef)):
         raise ValueError(
             f"register_autograd(op): got unexpected type for op: {type(op)}"
         )
-    if isinstance(op, torch._ops.OpOverload):
+    if isinstance(op, OpOverload):
         op = op._name
     opdef = _maybe_get_opdef(op)
     if opdef is not None:
@@ -849,7 +841,7 @@ def register_autograd(
 
     assert isinstance(op, str)
     qualname = op
-    op = torch._library.utils.lookup_op(qualname)
+    op = _library.utils.lookup_op(qualname)
     schema = op._schema
     if not _library.utils.is_functional_schema(schema):
         raise RuntimeError(
@@ -866,7 +858,7 @@ def register_autograd(
 
     info = _library.autograd.Info(backward, setup_context)
     autograd_kernel = _library.autograd.make_autograd_impl(op, info)
-    namespace, opname = torch._library.utils.parse_namespace(qualname)
+    namespace, opname = _library.utils.parse_namespace(qualname)
     if lib is None:
         lib = Library(namespace, "FRAGMENT")
         _keep_alive.append(lib)
@@ -965,7 +957,7 @@ def _check_pystubs_once(func, qualname, actual_module_name):
         if checked:
             return func(*args, **kwargs)
 
-        op = torch._library.utils.lookup_op(qualname)
+        op = _library.utils.lookup_op(qualname)
         if op._defined_in_python:
             checked = True
             return func(*args, **kwargs)
@@ -974,7 +966,7 @@ def _check_pystubs_once(func, qualname, actual_module_name):
             op._schema.name, op._schema.overload_name
         )
         if maybe_pystub is None:
-            if torch._library.utils.requires_set_python_module():
+            if _library.utils.requires_set_python_module():
                 namespace = op.namespace
                 cpp_filename = op._handle.debug()
                 raise RuntimeError(
@@ -1008,13 +1000,13 @@ def _check_pystubs_once(func, qualname, actual_module_name):
 #
 # This is done via us setting the global_ctx_getter function every time a fake
 # implementation is invoked.
-def get_ctx() -> "torch._library.fake_impl.FakeImplCtx":
+def get_ctx() -> "_library.fake_impl.FakeImplCtx":
     """get_ctx() returns the current AbstractImplCtx object.
 
     Calling ``get_ctx()`` is only valid inside of an fake impl
     (see :func:`torch.library.register_fake` for more usage details.
     """
-    return torch._library.fake_impl.global_ctx_getter()
+    return _library.fake_impl.global_ctx_getter()
 
 
 _OPCHECK_DEFAULT_UTILS = (
@@ -1026,7 +1018,7 @@ _OPCHECK_DEFAULT_UTILS = (
 
 
 def opcheck(
-    op: Union[torch._ops.OpOverload, torch._ops.OpOverloadPacket, CustomOpDef],
+    op: Union[OpOverload, OpOverloadPacket, CustomOpDef],
     args: Tuple[Any, ...],
     kwargs: Optional[Dict[str, Any]] = None,
     *,
