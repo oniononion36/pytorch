@@ -1067,7 +1067,7 @@ class GraphModule(torch.nn.Module):
 
         _saved_tensors_hooks_enable = torch._C._autograd._saved_tensors_hooks_enable();  _saved_tensors_hooks_enable = None
         return (add,)
-""",
+""",  # NOQA: B950
         )
 
     def test_disable_saved_tensors_hooks_prev_disabled(self):
@@ -1107,7 +1107,7 @@ class GraphModule(torch.nn.Module):
 
         _saved_tensors_hooks_disable_1 = torch._C._autograd._saved_tensors_hooks_disable('Previously disabled message');  _saved_tensors_hooks_disable_1 = None
         return (add,)
-""",
+""",  # NOQA: B950
         )
 
     def test_disable_saved_tensors_hooks_prev_disabled_nested(self):
@@ -1159,7 +1159,7 @@ class GraphModule(torch.nn.Module):
 
         _saved_tensors_hooks_disable_3 = torch._C._autograd._saved_tensors_hooks_disable('Previously disabled message');  _saved_tensors_hooks_disable_3 = None
         return (add_1,)
-""",
+""",  # NOQA: B950
         )
 
     def test_disable_saved_tensors_hooks_graph_break(self):
@@ -1192,7 +1192,7 @@ class GraphModule(torch.nn.Module):
 
         _saved_tensors_hooks_enable = torch._C._autograd._saved_tensors_hooks_enable();  _saved_tensors_hooks_enable = None
         return (y,)
-""",
+""",  # NOQA: B950
         )
 
         graph = eager.graphs[1]
@@ -1210,7 +1210,7 @@ class GraphModule(torch.nn.Module):
 
         _saved_tensors_hooks_enable = torch._C._autograd._saved_tensors_hooks_enable();  _saved_tensors_hooks_enable = None
         return (mul,)
-""",
+""",  # NOQA: B950
         )
 
     def test_context_wrapping_grad_mode_decorator(self):
