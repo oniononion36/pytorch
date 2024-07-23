@@ -3275,12 +3275,17 @@ is_fbcode = importlib.import_module("torch._inductor.config").is_fbcode()
 # Skip fbcode paths(including torch.package paths) containing
 # one of the following strings.
 FBCODE_SKIP_DIRS = set()
-# Remove this after fbcode is fully migrated to tracing through torchrec.
-if torch._dynamo.config.skip_torchrec:
-    FBCODE_SKIP_DIRS.add("torchrec/distributed")
-    FBCODE_SKIP_DIRS.add("torchrec/fb/distributed")
-    FBCODE_SKIP_DIRS.add("caffe2/torch/fb/sparsenn/pooled_embeddings_modules.py")
+
 FBCODE_SKIP_DIRS_RE = re.compile(f".*({'|'.join(map(re.escape, FBCODE_SKIP_DIRS))})")
+
+FBCODE_SKIP_TORCHREC_DIRS = {
+    "torchrec/distributed",
+    "trochrec/fb/distributed",
+    "caffe2/torch/fb/sparsenn/pooled_embeddings_modules.py"
+}
+
+FBCODE_SKIP_TORCHREC_DIRS_RE = re.compile(f".*({'|'.join(map(re.escape, FBCODE_SKIP_TORCHREC_DIRS))})")
+
 
 
 # TODO(yanboliang, anijain2305) - There are a few concerns that we should
@@ -3350,6 +3355,7 @@ def check_file(filename, is_inlined_call=False):
         )
     if (
         is_fbcode
+        and FBCODE_SKIP_DIRS
         and bool(FBCODE_SKIP_DIRS_RE.match(filename))
         and not bool(FBCODE_INLINE_FILES_IN_SKIPPED_DIRS_RE.match(filename))
     ):
@@ -3357,6 +3363,16 @@ def check_file(filename, is_inlined_call=False):
             True,
             "FBCODE_SKIP_DIRS",
         )
+
+    if (
+        is_fbcode
+        and FBCODE_SKIP_TORCHREC_DIRS
+        and bool(FBCODE_SKIP_TORCHREC_DIRS_RE.match(filename))
+        and not bool(FBCODE_INLINE_FILES_IN_SKIPPED_DIRS_RE.match(filename))
+        and torch._dynamo.config.skip_torchrec
+    ):
+        return SkipResult(True, "FBCODE_SKIP_TORCHREC_DIRS")
+        
     if bool(SKIP_DIRS_RE.match(filename)):
         return SkipResult(True, "SKIP_DIRS")
     else:
