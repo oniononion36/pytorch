@@ -968,7 +968,11 @@ class CppVecOverrides(CppOverrides):
                     assert isinstance(V.kernel, CppVecKernel)
                     new_args = [
                         V.kernel.broadcast(new_arg)
-                        if isinstance(new_arg, CppCSEVariable) and not new_arg.is_vec
+                        if (
+                            isinstance(new_arg, CppCSEVariable)
+                            and not new_arg.is_vec
+                            and func is not CppVecOverrides.randn
+                        )
                         else new_arg
                         for new_arg in new_args
                     ]
@@ -1178,6 +1182,35 @@ class CppVecOverrides(CppOverrides):
     @staticmethod
     def bitwise_right_shift(a, b):
         return f"{a} >> {b}"
+
+    @staticmethod
+    def load_seed(name, offset):
+        assert isinstance(V.kernel, CppVecKernel)
+        return f"{V.kernel.load(name, offset)}"
+
+    @staticmethod
+    def randn(seed, offset):
+        assert isinstance(V.kernel, CppVecKernel)
+        code = BracesBuffer()
+        code.writeline("[&]()")
+        with code.indent():
+            code.writeline(
+                f"{DTYPE_TO_CPP[offset.dtype]} offset[{V.kernel.tiling_factor}];"
+            )
+            code.writeline(
+                f"{DTYPE_TO_CPP[torch.float32]} result[{V.kernel.tiling_factor}];"
+            )
+            code.writeline(f"{offset}.store(offset);")
+            code.writeline(
+                f"for( {DTYPE_TO_CPP[offset.dtype]} offset_idx = 0; offset_idx < {V.kernel.tiling_factor}; offset_idx++ )"
+            )
+            with code.indent():
+                code.writeline(
+                    f"result[offset_idx] = randn_cpu({seed}, offset[offset_idx]);"
+                )
+            code.writeline("return at::vec::Vectorized<float>::loadu(result);")
+        code.writeline("()")
+        return code
 
     @staticmethod
     def tan(a):
