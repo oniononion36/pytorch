@@ -122,7 +122,7 @@ bool MPSDevice::isMacOS13Plus(MacOSVersion version) const {
   static bool _macos_14_4_plus = []() {
     NSProcessInfo* processInfo = [[NSProcessInfo alloc] init];
     return [processInfo isOperatingSystemAtLeastVersion:{.majorVersion = 14, .minorVersion = 4, .patchVersion = 0}];
-  }();  
+  }();
   static bool _macos_15_0_plus = []() {
     NSProcessInfo* processInfo = [[NSProcessInfo alloc] init];
     return [processInfo isOperatingSystemAtLeastVersion:{.majorVersion = 15, .minorVersion = 0, .patchVersion = 0}];
