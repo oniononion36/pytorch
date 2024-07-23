@@ -869,6 +869,22 @@ class TestConverter(TestCase):
         #         )[0], 1
         #     )
 
+    def test_aten_tensor_dtype_int(self):
+        class M(torch.nn.Module):
+            def forward(self, x):
+                y = torch.tensor(1, dtype=torch.int32)
+                return y + x
+
+        ep_list = self._check_equal_ts_ep_converter(M(), (torch.tensor(1),))
+
+    def test_aten_tensor_prim_dtype(self):
+        class M(torch.nn.Module):
+            def forward(self, x):
+                y = torch.tensor(1, dtype=x.dtype)
+                return y + x
+
+        ep_list = self._check_equal_ts_ep_converter(M(), (torch.tensor(1),))
+
     def test_prim_tolist(self):
         class Module(torch.nn.Module):
             def forward(self, x: torch.Tensor) -> List[int]:
