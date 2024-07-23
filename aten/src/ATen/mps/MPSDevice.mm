@@ -118,7 +118,11 @@ bool MPSDevice::isMacOS13Plus(MacOSVersion version) const {
   static bool _macos_13_3_plus = [compileOptions respondsToSelector:@selector(maxTotalThreadsPerThreadgroup)] == YES;
 
   static bool _macos_14_0_plus = [mpsCD instancesRespondToSelector:@selector(conjugateWithTensor:name:)] == YES;
-
+  // TODO: Change all version checks to use this API
+  static bool _macos_14_4_plus = []() {
+    NSProcessInfo* processInfo = [[NSProcessInfo alloc] init];
+    return [processInfo isOperatingSystemAtLeastVersion:{.majorVersion = 14, .minorVersion = 4, .patchVersion = 0}];
+  }();  
   static bool _macos_15_0_plus = []() {
     NSProcessInfo* processInfo = [[NSProcessInfo alloc] init];
     return [processInfo isOperatingSystemAtLeastVersion:{.majorVersion = 15, .minorVersion = 0, .patchVersion = 0}];
@@ -135,6 +139,8 @@ bool MPSDevice::isMacOS13Plus(MacOSVersion version) const {
       return _macos_13_3_plus;
     case MacOSVersion::MACOS_VER_14_0_PLUS:
       return _macos_14_0_plus;
+    case MacOSVersion::MACOS_VER_14_4_PLUS:
+      return _macos_14_4_plus;
     case MacOSVersion::MACOS_VER_15_0_PLUS:
       return _macos_15_0_plus;
     default:
