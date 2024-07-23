@@ -653,6 +653,10 @@ test_inductor_torchbench_smoketest_perf() {
   done
 }
 
+test_laith() {
+  echo "just doing echo for now"
+}
+
 test_inductor_set_cpu_affinity(){
   #set jemalloc
   JEMALLOC_LIB="/usr/lib/x86_64-linux-gnu/libjemalloc.so.2"
@@ -1301,6 +1305,8 @@ elif [[ "${TEST_CONFIG}" == *torchbench* ]]; then
   elif [[ "${TEST_CONFIG}" == *torchbench_gcp_smoketest* ]]; then
     checkout_install_torchbench
     TORCHBENCHPATH=$(pwd)/torchbench test_torchbench_gcp_smoketest
+  elif [[ "${TEST_CONFIG}" == *laith_test* ]]; then
+    test_laith
   else
     checkout_install_torchbench
     # Do this after checkout_install_torchbench to ensure we clobber any
